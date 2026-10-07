@@ -776,21 +776,30 @@ function checkAllImagesLoadedAndStartGame() {
 // 画像を事前にロード
 // const carImages = []; // この配列は直接使用されなくなります
 const loadedCarImageObjects = {}; // ファイル名をキーとするImageオブジェクトのマップ
+const REMOTE_IMAGE_FALLBACK_BASE = 'https://raw.githubusercontent.com/runon0512-star/Formula/refs/heads/main/';
 
 // carImageSources にリストされた全ての画像をロード
 carImageSources.forEach(src => {
     const img = new Image();
-    img.src = src;
+    let remoteFallbackAttempted = false;
     img.onload = () => {
         loadedImagesCount++;
         loadedCarImageObjects[src] = img; // ファイル名をキーとして保存
         checkAllImagesLoadedAndStartGame();
     };
     img.onerror = () => {
-        console.error(`Failed to load image: ${src}`);
+        if (!remoteFallbackAttempted) {
+            remoteFallbackAttempted = true;
+            const remoteUrl = `${REMOTE_IMAGE_FALLBACK_BASE}${encodeURIComponent(src)}`;
+            console.warn(`Local image not found: ${src}. Trying remote fallback: ${remoteUrl}`);
+            img.src = remoteUrl;
+            return;
+        }
+        console.error(`Failed to load image locally and remotely: ${src}`);
         loadedImagesCount++;
         checkAllImagesLoadedAndStartGame(); // エラーでもカウンターは進め、他がロードされれば開始試行
     };
+    img.src = src;
 });
 
 // グリッド配置の初期Y座標 (画面上部から少し離す)
