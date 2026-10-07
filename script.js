@@ -359,7 +359,7 @@ const GOAL_LINE_THICKNESS = 20; // ゴールラインの描画時の太さ
 
 // === 距離計算用定数・変数 (速度表示との整合性のため) ===
 const SPEED_TO_KMH_FACTOR = 20; // playerCar.speed (px/frame) * 20 = km/h
-const ASSUMED_FPS = 60;         // requestAnimationFrameのフレームレートを60FPSと仮定
+const ASSUMED_FPS = 60;         // 固定更新レート（60Hz）
 const SECONDS_PER_HOUR = 3600;
 let distanceToGoal = null;      // ゴールまでの残り距離 (km単位)
 let carsFinishedCount = 0; // ゴールした車の数をカウント
@@ -4724,6 +4724,9 @@ function drawSplitRaceScreen() {
             ctx.textAlign = 'center';
             const carPlayerIndex = playerCarIndices.indexOf(index);
             ctx.fillStyle = carPlayerIndex >= 0 ? MULTIPLAYER_COLORS[carPlayerIndex] : 'white';
+            if (car.isInSlipstream && gameState === 'race') {
+                ctx.fillStyle = 'lime';
+            }
             if (car.isDrsActive) {
                 ctx.shadowColor = '#29d9ff';
                 ctx.shadowBlur = 16;
@@ -4735,20 +4738,33 @@ function drawSplitRaceScreen() {
 
         const ranks = [...cars].sort((a, b) => a.y - b.y);
         const rank = ranks.indexOf(focusCar) + 1;
+        const remainingDistanceKm = Math.max(
+            0,
+            (focusCar.y - GOAL_LINE_Y_POSITION) * SPEED_TO_KMH_FACTOR / (ASSUMED_FPS * SECONDS_PER_HOUR)
+        );
+        const distanceText = gameState === 'signal_sequence'
+            ? 'Starting...'
+            : focusCar.hasFinished
+                ? 'Finished!'
+                : `To Goal: ${remainingDistanceKm.toFixed(3)} km`;
+        const hudX = viewport.x + viewport.width - 198;
         ctx.fillStyle = 'rgba(5, 8, 12, 0.78)';
-        ctx.fillRect(viewport.x + 8, viewport.y + 8, 178, 56);
+        ctx.fillRect(hudX, viewport.y + 8, 190, 76);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'white';
+        ctx.font = '800 11px Arial';
+        ctx.fillText(distanceText, hudX + 8, viewport.y + 27);
         ctx.fillStyle = labelColor;
         ctx.font = '900 15px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(`${label}  ${getDriverLastName(focusCar)}`, viewport.x + 16, viewport.y + 29);
-        ctx.fillStyle = 'white';
+        ctx.fillText(`${label}  ${getDriverLastName(focusCar)}`, hudX + 8, viewport.y + 49);
+        ctx.fillStyle = focusCar.isInSlipstream ? 'lime' : 'white';
         ctx.font = '700 12px Arial';
-        ctx.fillText(`P${rank}   ${Math.max(0, focusCar.speed * SPEED_TO_KMH_FACTOR).toFixed(0)} km/h`, viewport.x + 16, viewport.y + 50);
+        ctx.fillText(`P${rank}   ${Math.max(0, focusCar.speed * SPEED_TO_KMH_FACTOR).toFixed(0)} km/h`, hudX + 8, viewport.y + 70);
         if (focusCar.isDrsActive) {
             ctx.fillStyle = '#7de9ff';
             ctx.shadowColor = '#29d9ff';
             ctx.shadowBlur = 12;
-            ctx.fillText('DRS', viewport.x + 145, viewport.y + 50);
+            ctx.fillText('DRS', hudX + 145, viewport.y + 70);
             ctx.shadowBlur = 0;
         }
     };
@@ -7241,9 +7257,39 @@ function drawScrollbar(ctx, x, trackY, trackHeight, thumbActualY, thumbActualHei
 
 
 // ====== ゲームループ ======
-function gameLoop() {
-    update();
-    draw();
+const FIXED_UPDATE_INTERVAL_MS = 1000 / 60;
+const MAX_FIXED_UPDATES_PER_FRAME = 5;
+let previousGameLoopTimestamp = null;
+let fixedUpdateAccumulator = 0;
+
+function gameLoop(timestamp) {
+    const frameTimestamp = Number.isFinite(timestamp) ? timestamp : performance.now();
+
+    if (previousGameLoopTimestamp === null) {
+        previousGameLoopTimestamp = frameTimestamp;
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
+    const elapsed = Math.min(250, Math.max(0, frameTimestamp - previousGameLoopTimestamp));
+    previousGameLoopTimestamp = frameTimestamp;
+    fixedUpdateAccumulator += elapsed;
+
+    let updateCount = 0;
+    while (fixedUpdateAccumulator >= FIXED_UPDATE_INTERVAL_MS && updateCount < MAX_FIXED_UPDATES_PER_FRAME) {
+        update();
+        fixedUpdateAccumulator -= FIXED_UPDATE_INTERVAL_MS;
+        updateCount++;
+    }
+
+    // 長時間タブが停止していた場合は、復帰直後の過剰な追いつき処理を捨てる。
+    if (updateCount === MAX_FIXED_UPDATES_PER_FRAME) {
+        fixedUpdateAccumulator %= FIXED_UPDATE_INTERVAL_MS;
+    }
+
+    if (updateCount > 0) draw();
     requestAnimationFrame(gameLoop);
 }
 // 全ての画像がロードされてからゲームループを開始するため、直接呼び出しはしない
